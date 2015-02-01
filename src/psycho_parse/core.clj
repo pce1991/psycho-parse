@@ -1,4 +1,4 @@
- (ns psycho-parse.core
+(ns psycho-parse.core
   (:require [opennlp.nlp :refer :all]
             [opennlp.treebank :refer :all]
             [clj-wordnet.core :refer :all]
@@ -25,45 +25,75 @@
     ;; i want to build up the trees for each synset, 
     (into [] hypernyms)))
 
-;;its important that this not go thru so many tries as the other which
-;;added way to mayn redundant cases to hypernyms
-;; create a tree structure
-;;look at current hypernyms of a word, and then update that into the set
+;; may want this in a vector instead for indexing
+;; this can be used by hypernyms to find the right position to reset the path to by finding the position of the current synset in all paths you could take, and each synset is guaranteed to come up only one time. the only uncertainty is if we know where to reset it to, so we may actually want to be able to follow the path to a certain synse
+(defn nested-keys [map]
+  (filter keyword? (tree-seq map? #(interleave (keys %) (vals %)) map)))
+
+;;all i want is the path
+;;use this keys-in function
+;;returns the ending key too often when what i want is just the synset val
+;; thanks to whoeber wrote this
+(defn keys-in [m]
+  (if (map? m)
+    (vec (mapcat (fn [[k v]]
+                   (let [sub (keys-in v)
+                         nested (map #(into [k] %) (filter (comp not empty?) sub))]
+                     (if (seq nested)
+                       nested
+                       [[k]])))
+                 m))
+    []))
+
+;;record the depth at which the key was found to know when two are =
+(defn path-to [map key]
+  
+  )
+
+(defn hypernym [entry]
+  "Returns the hypernyms for an entry in a tree form where the synset-id is mapped to all the entries in that synset and to any potential hypernyms of that set."
+  (let [m (related-synsets entry :hypernym)
+        synsets (keys m)
+        hypernyms (vals m)
+        hyp-nodes (map (fn [s] {:synset s :hypernyms nil}) hypernyms)
+        tree-node (zipmap synsets hyp-nodes)]
+    tree-node))
+
+;; only add the first of each synest to to-search
+;;need to reset path, and make sure hypernyms is appended for each
+;;it'll come after it tho, so chidren new-id
+;;its overwriting valuse cause theyre not getting put in hypernyms
 (defn hypernyms [entry]
-  (loop [hypernyms {}             ;(related-synsets entry :hypernym)
-         to-search [entry]             ;(map #(into [] %) (vals hypernyms))
-         synset-ids []]
-;   (println (map :lemma to-search))
-;    (println (count synset-ids))
+  (loop [to-search [entry]
+         hypernyms {}
+         path []]
     (clojure.pprint/pprint hypernyms)
     (if (empty? to-search)
       hypernyms
-      (let [e (first to-search)
+      (let [e (if (map? (first to-search))
+                (first to-search)
+                ;if its a synset need only one exemplar entry
+                (first (first to-search))) 
             synset-id (:synset-id e)
-            ;; sometimes this may need to be reset, when we return to an
-            ;; earlier synset, but which one? if we get a synset thats
-            ;;already appeared I think we know to reset to that point
-            synset-ids (conj synset-ids synset-id)
-            hyprnms (related-synsets e :hypernym)
-            hyp-entries (flatten (vals hyprnms))
-            ]
+            ;;need to add hypernyms before id so its a child
+            path (conj path synset-id)
+            ;;will need to append :hypernyms most of the time 
+            ;;still need to determine how to reset this
+            
+            hyprnms (hypernym e)
+            hyp-entries (map :synset (vals hyprnms))] ;;instead of this just go thru entries as whole synsets checking to see 
         (if (empty? hyprnms)
-          (recur hypernyms (rest to-search) synset-ids) ;;wrong?!
-          ;;i may need to build up a vector of synset-ids, but it couldnt just accumlate
-          ;; 
-          (recur
-           ;;right now synset is going out of bounds?
-           ;;i think i definitely need update in, its losing all the
-           ;;the early entries, keeping only synset. think of its idealform
-           ;;each id needs to hold its hyps, and also its childre
-           (assoc-in  hypernyms synset-ids hyprnms)
-                 (concat hyp-entries (rest to-search))
-                 ;;this is so it follows one path all the way before backing up.
-                 synset-ids
-                 ))
-
+          ;;if its empty then path needs to be updated
+          (recur (rest to-search) hypernyms path)
+          (recur (concat hyp-entries (rest path))
+                 ;;wrong: hyprnms lack keys for entries and hyeprnyms!
+                 ;;probably need to use updatein so that I can add children to a node 
+                 (assoc-in hypernyms path hyprnms)
+                 path))
         ))
-    ))
+    )
+  )
+
 
 ;; how do i know which synset to go down?
 (defn word->hypernym [word depth]
